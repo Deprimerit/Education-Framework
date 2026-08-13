@@ -1641,5 +1641,240 @@ button{font-family:inherit;}
 })();
 
 </script>
+<script>
+(function(){
+  "use strict";
+  var DATA = window.__CONSTITUTION__;
+  if(!DATA) return;
+
+  /* ---- Inject styles ---- */
+  var css = [
+    ".xref{color:inherit;text-decoration:none;border-bottom:1px solid rgba(140,106,30,.45);cursor:pointer;transition:background-color .12s ease,border-color .12s ease;}",
+    ".xref:hover{border-bottom-color:var(--gold);background:rgba(255,215,0,.10);}",
+    ".reader p.link-active,.reader li.link-active{background:rgba(255,215,0,.15);border-radius:3px;}",
+    ".reader p.xref-host,.reader li.xref-host{position:relative;}",
+    ".reader p.xref-host::before,.reader li.xref-host::before{content:\"\";position:absolute;left:-16px;top:2px;bottom:2px;width:2px;background:rgba(140,106,30,.30);border-radius:2px;}",
+    ".reader p.xref-host:hover::before,.reader li.xref-host:hover::before{background:var(--gold);}",
+    ".insight-portal{position:fixed;top:50%;right:24px;transform:translateY(-50%) translateX(10px);width:300px;max-width:38vw;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line-strong);border-left:3px solid var(--gold);border-radius:8px;box-shadow:var(--shadow-md);padding:15px 16px 13px;opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:60;font-family:var(--sans);}",
+    ".insight-portal.open{opacity:1;pointer-events:auto;transform:translateY(-50%) translateX(0);}",
+    ".insight-portal .ip-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--gold);text-transform:uppercase;margin-bottom:6px;}",
+    ".insight-portal .ip-title{font-family:var(--serif);font-weight:600;font-size:15.5px;color:var(--navy);line-height:1.3;margin:0 0 8px;}",
+    ".insight-portal .ip-def{font-size:13px;color:var(--ink);line-height:1.5;margin:0 0 12px;padding:10px 12px;background:var(--gold-tint);border-radius:5px;}",
+    ".insight-portal .ip-snippet{font-size:13px;color:var(--ink-soft);line-height:1.5;margin:0 0 12px;}",
+    ".insight-portal .ip-actions{display:flex;gap:8px;flex-wrap:wrap;}",
+    ".insight-portal .ip-btn{border:1px solid var(--line-strong);background:var(--paper-raised);color:var(--ink);font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;padding:7px 11px;border-radius:5px;cursor:pointer;text-decoration:none;transition:background .12s ease,border-color .12s ease;}",
+    ".insight-portal .ip-btn:hover{background:var(--navy-tint);border-color:var(--navy);}",
+    ".insight-portal .ip-btn.primary{background:var(--navy);color:#F3EFDF;border-color:var(--navy);}",
+    ".insight-portal .ip-btn.primary:hover{background:#243761;}",
+    "a.gterm:hover::after,a.gterm:focus::after{display:none !important;}",
+    "@media (max-width:900px){.insight-portal{right:10px;left:10px;width:auto;max-width:none;top:auto;bottom:64px;transform:translateY(10px);}.insight-portal.open{transform:translateY(0);}}"
+  ].join("\n");
+  var styleEl = document.createElement("style");
+  styleEl.textContent = css;
+  document.head.appendChild(styleEl);
+
+  var hideTimer;
+
+  /* ---- Build cross-reference index ---- */
+  var partByRoman = {};
+  DATA.parts.forEach(function(p, pi){
+    var r = p.numeral ? String(p.numeral).toUpperCase() : "";
+    if(r) partByRoman[r] = pi;
+  });
+
+  var sectionMap = {}; /* pi -> { sec:{num->vi}, letters:{num->{letter->vi}} } */
+  DATA.parts.forEach(function(part, pi){
+    var sec = {}, lets = {};
+    part.provisions.forEach(function(prov, vi){
+      var lab = prov.label || "";
+      var m, labNoRange = lab;
+      var rangeRe = /§\s*(\d+)\s*\(([A-Z])\)\s*[-–]\s*\(([A-Z])\)/g;
+      while((m = rangeRe.exec(lab)) !== null){
+        var n = parseInt(m[1],10);
+        var a = m[2].charCodeAt(0), b = m[3].charCodeAt(0);
+        for(var c=a;c<=b;c++){ (lets[n]=lets[n]||{})[String.fromCharCode(c)] = vi; }
+        labNoRange = labNoRange.split(m[0]).join("");
+      }
+      var singleRe = /§\s*(\d+)\s*\(([A-Z])\)/g;
+      while((m = singleRe.exec(labNoRange)) !== null){
+        var n2 = parseInt(m[1],10);
+        (lets[n2]=lets[n2]||{})[m[2]] = vi;
+      }
+      var secRe = /§\s*(\d+)/g;
+      while((m = secRe.exec(lab)) !== null){
+        var n3 = parseInt(m[1],10);
+        if(sec[n3]===undefined) sec[n3] = vi;
+      }
+    });
+    sectionMap[pi] = { sec: sec, letters: lets };
+  });
+
+  function resolveRef(article, section, subletter){
+    var pi = partByRoman[article];
+    if(pi === undefined) return null;
+    var vi = 0;
+    if(section){
+      var entry = sectionMap[pi];
+      if(subletter && entry.letters[section] && entry.letters[section][subletter.toUpperCase()] !== undefined){
+        vi = entry.letters[section][subletter.toUpperCase()];
+      } else if(entry.sec[section] !== undefined){
+        vi = entry.sec[section];
+      } else { vi = 0; }
+    }
+    var part = DATA.parts[pi];
+    var prov = part.provisions[vi] || part.provisions[0];
+    var fullText = (prov.text || []).join(" ");
+    var snippet = fullText.length > 220 ? fullText.slice(0,220).trim() + "…" : fullText;
+    return { pi: pi, vi: vi, slug: part.slug, partTitle: part.title, title: prov.title, label: prov.label, snippet: snippet };
+  }
+
+  function escAttr(s){ return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function escHtml(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+  var XREF_RE = /Article\s+([IVXLCDM]+)\s*(?:§\s*(\d+)(?:\(([a-z])\))?)?/g;
+
+  function makeXrefHtml(matchText, article, section, subletter){
+    var ref = resolveRef(article, section, subletter);
+    if(!ref) return null;
+    var href = "#/" + ref.slug + "/" + ref.vi;
+    var label = ref.partTitle + " · " + ref.label + " — " + ref.title;
+    return '<a class="xref" href="' + href + '" data-pi="' + ref.pi + '" data-vi="' + ref.vi + '" data-label="' + escAttr(label) + '" data-snippet="' + escAttr(ref.snippet) + '">' + escHtml(matchText) + '</a>';
+  }
+
+  var reader = document.getElementById("reader");
+  if(!reader) return;
+
+  function processReader(){
+    var walker = document.createTreeWalker(reader, NodeFilter.SHOW_TEXT, {
+      acceptNode: function(n){
+        if(!n.nodeValue) return NodeFilter.FILTER_REJECT;
+        if(!/Article\s+[IVXLCDM]/.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
+        var p = n.parentNode, inPL = false, inA = false;
+        while(p && p !== reader){
+          if(p.tagName === "A"){ inA = true; break; }
+          if(p.tagName === "P" || p.tagName === "LI") inPL = true;
+          p = p.parentNode;
+        }
+        if(inA || !inPL) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var nodes = [], tn;
+    while((tn = walker.nextNode())) nodes.push(tn);
+    nodes.forEach(function(textNode){
+      var text = textNode.nodeValue;
+      XREF_RE.lastIndex = 0;
+      var frag = document.createDocumentFragment();
+      var last = 0, m, any = false;
+      while((m = XREF_RE.exec(text)) !== null){
+        var html = makeXrefHtml(m[0], m[1], m[2] ? parseInt(m[2],10) : null, m[3] || null);
+        if(html){
+          any = true;
+          if(m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          var tpl = document.createElement("template");
+          tpl.innerHTML = html;
+          while(tpl.content.firstChild) frag.appendChild(tpl.content.firstChild);
+          last = m.index + m[0].length;
+        }
+      }
+      if(any){
+        if(last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+        textNode.parentNode.replaceChild(frag, textNode);
+      }
+    });
+    reader.querySelectorAll(".xref").forEach(function(a){
+      var host = a.closest("p, li");
+      if(host) host.classList.add("xref-host");
+    });
+  }
+
+  /* ---- Insight Portal ---- */
+  var portal;
+  function ensurePortal(){
+    if(portal) return portal;
+    portal = document.createElement("div");
+    portal.className = "insight-portal";
+    portal.setAttribute("role","tooltip");
+    portal.innerHTML =
+      '<div class="ip-eyebrow"></div>' +
+      '<div class="ip-title"></div>' +
+      '<div class="ip-def" style="display:none"></div>' +
+      '<div class="ip-snippet"></div>' +
+      '<div class="ip-actions"></div>';
+    document.body.appendChild(portal);
+    return portal;
+  }
+  function showPortalForXref(a){
+    ensurePortal();
+    portal.querySelector(".ip-eyebrow").textContent = "Cross-reference · click to navigate";
+    portal.querySelector(".ip-title").textContent = a.getAttribute("data-label") || "";
+    portal.querySelector(".ip-snippet").textContent = a.getAttribute("data-snippet") || "";
+    var def = portal.querySelector(".ip-def"); def.style.display = "none"; def.textContent = "";
+    var href = a.getAttribute("href") || "";
+    portal.querySelector(".ip-actions").innerHTML = '<a class="ip-btn primary" href="' + href + '">Go to section</a>';
+    portal.classList.add("open");
+  }
+  function showPortalForGterm(a){
+    ensurePortal();
+    portal.querySelector(".ip-eyebrow").textContent = "Definition · click to open Wikipedia";
+    portal.querySelector(".ip-title").textContent = a.textContent || "";
+    portal.querySelector(".ip-snippet").textContent = "";
+    var def = portal.querySelector(".ip-def");
+    def.textContent = a.getAttribute("data-def") || "";
+    def.style.display = def.textContent ? "block" : "none";
+    var url = a.getAttribute("href") || "";
+    portal.querySelector(".ip-actions").innerHTML = '<a class="ip-btn primary" href="' + url + '" target="_blank" rel="noopener">View Wikipedia</a>';
+    portal.classList.add("open");
+  }
+  function hidePortal(){ if(portal) portal.classList.remove("open"); }
+
+  function activate(el){
+    clearTimeout(hideTimer);
+    reader.querySelectorAll(".link-active").forEach(function(e){ e.classList.remove("link-active"); });
+    var host = el.closest("p, li");
+    if(host) host.classList.add("link-active");
+    if(el.classList.contains("xref")) showPortalForXref(el);
+    else showPortalForGterm(el);
+  }
+  function deactivate(){
+    hideTimer = setTimeout(function(){
+      hidePortal();
+      reader.querySelectorAll(".link-active").forEach(function(e){ e.classList.remove("link-active"); });
+    }, 140);
+  }
+
+  reader.addEventListener("mouseover", function(e){
+    var a = e.target.closest && e.target.closest("a.xref, a.gterm");
+    if(a) activate(a);
+  });
+  reader.addEventListener("mouseout", function(e){
+    var a = e.target.closest && e.target.closest("a.xref, a.gterm");
+    if(a) deactivate();
+  });
+  reader.addEventListener("focusin", function(e){
+    var a = e.target.closest && e.target.closest("a.xref, a.gterm");
+    if(a) activate(a);
+  });
+  reader.addEventListener("focusout", function(e){
+    var a = e.target.closest && e.target.closest("a.xref, a.gterm");
+    if(a) deactivate();
+  });
+  document.addEventListener("mouseover", function(e){
+    if(e.target && e.target.closest && e.target.closest(".insight-portal")) clearTimeout(hideTimer);
+  });
+
+  /* ---- Re-run after each render ---- */
+  var busy = false;
+  var observer = new MutationObserver(function(){ if(!busy) schedule(); });
+  function schedule(){
+    if(busy) return;
+    busy = true;
+    try { observer.disconnect(); processReader(); }
+    finally { busy = false; observer.observe(reader, { childList:true, subtree:true }); }
+  }
+  observer.observe(reader, { childList:true, subtree:true });
+  processReader();
+})();
+</script>
 </body>
 </html>
