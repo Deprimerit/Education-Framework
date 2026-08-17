@@ -2106,11 +2106,61 @@ FIREBASE SETUP
 3. Create Cloud Firestore and publish these rules:
 
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    /*
+     * ============================================================
+     * Re-audited against Education-System-Community-AI (__1_).html
+     * Traced every addDoc/updateDoc/batch.set call site directly —
+     * this is not the doc-comment copy embedded in the HTML, which
+     * was out of sync with the real schema.
+     *
+     * CHANGE IN THIS REVISION vs. the prior rules file:
+     * The prior file used the same `validAttachment()` (built for
+     * comment attachments uploaded to Cloudinary via
+     * uploadCommunityFile()) to also validate AI chat message
+     * attachments. Those are NOT the same shape — AI attachments
+     * come from preparedAttachments()/cleanAttachment() and are
+     * deliberately never uploaded anywhere (see the app's own
+     * Privacy & Data text: "files attached here in the AI panel
+     * are never uploaded anywhere"). Concretely, AI attachments:
+     *   - always carry extra `ext` and `status` fields the old
+     *     validator didn't allow (hasOnly rejected them),
+     *   - always set `localOnly: true` (the old validator required
+     *     `localOnly == false` when present),
+     *   - have `url` equal to '' (local files) or an arbitrary
+     *     external https:// link pasted via "Add external link"
+     *     — never a res.cloudinary.com URL, which the old
+     *     validator required.
+     * Under the prior rules, EVERY AI conversation containing a
+     * file or link attachment would fail to sync to
+     * aiConversationPrivate (permission-denied on saveCloud()'s
+     * batch.set), even though this is a normal, supported feature
+     * of the AI panel. This revision adds validAiAttachment(),
+     * modeled on the real object shape from preparedAttachments()/
+     * cleanAttachment()/addAiLink(), and uses it everywhere an AI
+     * message's attachments are validated. validAttachment() is
+     * left untouched and still used only for comments/{commentId},
+     * which is the flow it was actually written for.
+     * ============================================================
+     */
+
+    // ---------- Common helpers ----------
+
     function signedIn() { return request.auth != null; }
+
     function validVisibility(v) { return v in ['public', 'private']; }
-    function validAiDate(v) { return v is string && v.size() >= 20 && v.size() <= 40; }
+
+    function validAiDate(v) {
+      return v is string && v.size() >= 20 && v.size() <= 40;
+    }
+
+    function validId(v) { return v is string && v.size() > 0 && v.size() <= 64; }
+
+    // Google Sign-In is the only auth provider this app uses, so the ID
+    // token's name/picture claims are the source of truth for identity.
     function tokenHasName() {
       return 'name' in request.auth.token
         && request.auth.token.name is string
@@ -2133,144 +2183,388 @@ service cloud.firestore {
         && ((tokenHasPicture() && value == request.auth.token.picture)
             || (!tokenHasPicture() && value == ''));
     }
-    function validMessage(value) {
-      return value is map
-        && value.keys().hasOnly(['role', 'content'])
-        && value.role in ['user', 'assistant', 'system']
-        && value.content is string
-        && value.content.size() <= 4000;
-    }
-    function validMessages(value) {
-      return value is list
-        && value.size() <= 24
-        && value.all(validMessage);
-    }
+
+    // ---------- Comment attachments (uploaded to Cloudinary via uploadCommunityFile()) ----------
+    // Real uploads always go through uploadCommunityFile() -> Cloudinary's
+    // unsigned-preset endpoint, so url is restricted to that domain. The
+    // optional 'text' field is extracted-file text, capped at 8000 chars
+    // by cleanAttachment(). Used ONLY by comments/{commentId} below — do
+    // NOT reuse this for AI message attachments, see validAiAttachment().
     function validAttachment(value) {
       return value is map
-        && value.keys().hasOnly(['id', 'name', 'type', 'size', 'kind', 'url', 'localOnly'])
-        && value.name is string
-        && value.name.size() > 0
-        && value.name.size() <= 260
-        && value.type is string
-        && value.type.size() <= 160
-        && value.size is int
-        && value.size >= 0
-        && value.size <= 26214400
-        && value.kind in ['file', 'image', 'video']
-        && value.url is string
-        && value.url.matches('^https://res\\.cloudinary\\.com/.*');
+        && value.keys().hasAll(['id','name','type','size','kind','url'])
+        && value.keys().hasOnly(['id','name','type','size','kind','url','localOnly','text'])
+        && validId(value.id)
+        && value.name is string && value.name.size() > 0 && value.name.size() <= 260
+        && value.type is string && value.type.size() <= 160
+        && value.size is int && value.size >= 0 && value.size <= 26214400
+        && value.kind in ['file','image','video']
+        && value.url is string && value.url.matches('^https://res\\.cloudinary\\.com/.*')
+        && (!('localOnly' in value) || value.localOnly == false)
+        && (!('text' in value) || (value.text is string && value.text.size() <= 8000));
     }
-    function validAttachments(value) {
-      return value is list
-        && value.size() <= 10
-        && value.all(validAttachment);
-    }
-    function boundedConversation(data) {
-      return data.id is string
-        && data.id.size() <= 128
-        && data.ownerUid is string
-        && data.ownerUid == request.auth.uid
-        && validOwnerName(data.ownerName)
-        && data.title is string
-        && data.title.size() <= 80
-        && validAiDate(data.createdAt)
-        && validAiDate(data.updatedAt)
-        && validMessages(data.messages)
-        && validVisibility(data.visibility);
+    function validAttachments(value, maxCount) {
+      return value is list && value.size() <= maxCount && value.all(validAttachment);
     }
 
+    // ---------- AI chat attachments (never uploaded — preparedAttachments()/cleanAttachment()) ----------
+    // Local files: {id,name,type,size,ext,kind,url:'',status,localOnly:true,text?}
+    // External links (addAiLink()): same shape but url is the pasted
+    // https:// page and kind:'link'. size is capped client-side at
+    // MAX_FILE_SIZE (25*1024*1024); text is capped at 8000 chars by
+    // cleanAttachment(). thumbnail/file/error are always stripped before
+    // the object reaches Firestore, so they are intentionally not allowed.
+    function validAiAttachment(value) {
+      return value is map
+        && value.keys().hasAll(['id','name','type','size','ext','kind','url','status'])
+        && value.keys().hasOnly(['id','name','type','size','ext','kind','url','status','localOnly','text'])
+        && validId(value.id)
+        && value.name is string && value.name.size() > 0 && value.name.size() <= 300
+        && value.type is string && value.type.size() <= 160
+        && value.size is int && value.size >= 0 && value.size <= 26214400
+        && value.ext is string && value.ext.size() <= 20
+        && value.kind in ['file','image','video','office','link']
+        && value.url is string && value.url.size() <= 2048
+        && (value.url == '' || value.url.matches('^https://.*'))
+        && value.status is string && value.status.size() <= 200
+        && (!('localOnly' in value) || value.localOnly == true)
+        && (!('text' in value) || (value.text is string && value.text.size() <= 8000));
+    }
+    function validAiAttachments(value, maxCount) {
+      return value is list && value.size() <= maxCount && value.all(validAiAttachment);
+    }
+
+    // ---------- External references (Wikipedia lookups only, per references()) ----------
+    function validSource(value) {
+      return value is map
+        && value.keys().hasOnly(['title','url','extract'])
+        && value.title is string && value.title.size() <= 300
+        && value.url is string && value.url.matches('^https://en\\.wikipedia\\.org/.*')
+        && value.extract is string && value.extract.size() <= 1500;
+    }
+    function validSources(value) {
+      // references() requests gsrlimit=4; 6 leaves headroom without being unbounded.
+      return value is list && value.size() <= 6 && value.all(validSource);
+    }
+
+
+    /*
+     * ============================================================
+     * comments/{commentId}
+     * ============================================================
+     */
+
     match /comments/{commentId} {
-      allow read: if resource.data.visibility == 'public'
-                  || (signedIn() && resource.data.authorUid == request.auth.uid);
-      allow create: if signedIn()
-                    && request.resource.data.authorUid == request.auth.uid
-                    && validOwnerName(request.resource.data.authorName)
-                    && validAuthorPhoto(request.resource.data.authorPhoto)
-                    && request.resource.data.createdAt == request.time
-                    && request.resource.data.updatedAt == null
-                    && validVisibility(request.resource.data.visibility)
-                    && request.resource.data.body is string
-                    && request.resource.data.body.size() > 0
-                    && request.resource.data.body.size() <= 3000
-                    && (!('attachments' in request.resource.data)
-                        || validAttachments(request.resource.data.attachments))
-                    && request.resource.data.keys().hasOnly([
-                      'contextType','sectionId','sectionLabel','locationId','quote','lineKind',
-                      'body','visibility','parentId','rootId','deleted','authorUid','authorName',
-                      'authorPhoto','createdAt','updatedAt','attachments'
-                    ]);
-      allow update: if signedIn()
-                    && resource.data.authorUid == request.auth.uid
-                    && request.resource.data.authorUid == resource.data.authorUid
-                    && validOwnerName(request.resource.data.authorName)
-                    && validAuthorPhoto(request.resource.data.authorPhoto)
-                    && request.resource.data.contextType == resource.data.contextType
-                    && request.resource.data.sectionId == resource.data.sectionId
-                    && request.resource.data.locationId == resource.data.locationId
-                    && request.resource.data.parentId == resource.data.parentId
-                    && request.resource.data.rootId == resource.data.rootId
-                    && request.resource.data.createdAt == resource.data.createdAt
-                    && request.resource.data.updatedAt == request.time
-                    && validVisibility(request.resource.data.visibility)
-                    && request.resource.data.body is string
-                    && request.resource.data.body.size() <= 3000
-                    && ((request.resource.data.deleted == true
-                         && request.resource.data.body == ''
-                         && (!('attachments' in request.resource.data)
-                             || request.resource.data.attachments.size() == 0))
-                        || (request.resource.data.deleted == false
-                            && request.resource.data.body.size() > 0
-                            && (!('attachments' in request.resource.data)
-                                || validAttachments(request.resource.data.attachments))))
-                    && request.resource.data.diff(resource.data).affectedKeys()
-                         .hasOnly(['body','visibility','deleted','updatedAt','attachments']);
+
+      allow get: if
+        resource.data.visibility == 'public'
+        || (signedIn() && resource.data.authorUid == request.auth.uid);
+
+      allow list: if
+        resource.data.visibility == 'public'
+        || (signedIn() && resource.data.authorUid == request.auth.uid);
+
+      allow create: if
+        signedIn()
+        && request.resource.data.keys().hasAll([
+             'contextType','sectionId','sectionLabel','locationId','quote','lineKind',
+             'body','visibility','parentId','rootId','deleted','authorUid','authorName',
+             'authorPhoto','createdAt','updatedAt'
+           ])
+        && request.resource.data.keys().hasOnly([
+             'contextType','sectionId','sectionLabel','locationId','quote','lineKind',
+             'body','visibility','parentId','rootId','deleted','authorUid','authorName',
+             'authorPhoto','createdAt','updatedAt','attachments'
+           ])
+        && request.resource.data.contextType in ['provision','community']
+        && request.resource.data.sectionId is string
+        && request.resource.data.sectionId.size() >= 1 && request.resource.data.sectionId.size() <= 240
+        && request.resource.data.sectionLabel is string && request.resource.data.sectionLabel.size() <= 400
+        && request.resource.data.locationId is string
+        && request.resource.data.locationId.size() >= 1 && request.resource.data.locationId.size() <= 300
+        && request.resource.data.quote is string && request.resource.data.quote.size() <= 1000
+        && request.resource.data.lineKind is string && request.resource.data.lineKind.size() <= 80
+        && request.resource.data.body is string
+        && request.resource.data.body.size() > 0 && request.resource.data.body.size() <= 3000
+        && validVisibility(request.resource.data.visibility)
+        && (request.resource.data.parentId == null
+            || (request.resource.data.parentId is string && request.resource.data.parentId.size() <= 300))
+        && (request.resource.data.rootId == null
+            || (request.resource.data.rootId is string && request.resource.data.rootId.size() <= 300))
+        && request.resource.data.deleted == false
+        && request.resource.data.authorUid == request.auth.uid
+        // Identity is checked against the live token only at creation time.
+        && validOwnerName(request.resource.data.authorName)
+        && validAuthorPhoto(request.resource.data.authorPhoto)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == null
+        && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments, 10));
+
+      allow update: if
+        signedIn()
+        && resource.data.authorUid == request.auth.uid
+        && resource.data.deleted == false
+        && request.resource.data.keys().hasAll([
+             'contextType','sectionId','sectionLabel','locationId','quote','lineKind',
+             'body','visibility','parentId','rootId','deleted','authorUid','authorName',
+             'authorPhoto','createdAt','updatedAt'
+           ])
+        && request.resource.data.keys().hasOnly([
+             'contextType','sectionId','sectionLabel','locationId','quote','lineKind',
+             'body','visibility','parentId','rootId','deleted','authorUid','authorName',
+             'authorPhoto','createdAt','updatedAt','attachments'
+           ])
+        && request.resource.data.authorUid == resource.data.authorUid
+        // editCommentById() only patches {body,visibility,attachments,updatedAt} —
+        // authorName/authorPhoto normally carry over unchanged from resource.data.
+        // Still allow a legitimate refresh if it now matches the live token
+        // (e.g. the user's Google display name changed since the original post),
+        // rather than requiring exact equality forever, which would silently
+        // block edits to old comments after any profile-name change.
+        && (request.resource.data.authorName == resource.data.authorName || validOwnerName(request.resource.data.authorName))
+        && (request.resource.data.authorPhoto == resource.data.authorPhoto || validAuthorPhoto(request.resource.data.authorPhoto))
+        && request.resource.data.contextType == resource.data.contextType
+        && request.resource.data.sectionId == resource.data.sectionId
+        && request.resource.data.sectionLabel == resource.data.sectionLabel
+        && request.resource.data.locationId == resource.data.locationId
+        && request.resource.data.quote == resource.data.quote
+        && request.resource.data.lineKind == resource.data.lineKind
+        && request.resource.data.parentId == resource.data.parentId
+        && request.resource.data.rootId == resource.data.rootId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && validVisibility(request.resource.data.visibility)
+        && request.resource.data.body is string && request.resource.data.body.size() <= 3000
+        && request.resource.data.deleted in [false, true]
+        && (
+             (request.resource.data.deleted == false
+              && request.resource.data.body.size() > 0
+              && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments, 10)))
+             ||
+             (request.resource.data.deleted == true
+              && request.resource.data.body == ''
+              && (!('attachments' in request.resource.data) || request.resource.data.attachments.size() == 0))
+           )
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['body','visibility','attachments','deleted','updatedAt','authorName','authorPhoto']);
+
+      // Soft delete only — see the update rule's deleted==true branch.
       allow delete: if false;
     }
 
-    // Current visible projection only. Public documents intentionally exclude
-    // message-version history, regeneration history, extracted file text, and URLs.
+
+    /*
+     * ============================================================
+     * aiConversations/{conversationId} — public projection
+     *
+     * publicProjection() strips versions/responses/authorUid and only
+     * ever writes: id, title, visibility, ownerUid, ownerName,
+     * createdAt, updatedAt, messages — where each message is either
+     *   user:      {id, role, content, createdAt}
+     *   assistant: {id, role, parentMessageId, parentVersionId,
+     *               content, sources, createdAt}
+     * batch.set() with no {merge:true} means request.resource.data is
+     * always the FULL document the client just built — ownerName is
+     * always freshly derived from the live token at save time, so
+     * (unlike comments) no staleness allowance is needed here.
+     * publicProjection() never includes attachments, so no attachment
+     * validator is needed in this match block.
+     * ============================================================
+     */
+
+    function validPublicMessage(value) {
+      return value is map
+        && validId(value.id)
+        && value.createdAt is string
+        && (
+             (value.keys().hasOnly(['id','role','content','createdAt'])
+              && value.role == 'user'
+              && value.content is string && value.content.size() <= 2000)
+             ||
+             (value.keys().hasOnly(['id','role','parentMessageId','parentVersionId','content','sources','createdAt'])
+              && value.role == 'assistant'
+              && validId(value.parentMessageId)
+              && value.parentVersionId is string && value.parentVersionId.size() <= 64
+              && value.content is string && value.content.size() <= 6000
+              && validSources(value.sources))
+           );
+    }
+    function validPublicMessages(value) {
+      return value is list && value.size() <= 24 && value.all(validPublicMessage);
+    }
+    function boundedPublicConversation(data) {
+      return validId(data.id)
+        && data.ownerUid is string && data.ownerUid == request.auth.uid
+        && validOwnerName(data.ownerName)
+        && data.title is string && data.title.size() <= 80
+        && validAiDate(data.createdAt)
+        && validAiDate(data.updatedAt)
+        && validVisibility(data.visibility)
+        && validPublicMessages(data.messages);
+    }
+
     match /aiConversations/{conversationId} {
-      allow read: if resource.data.visibility == 'public'
-                  || (signedIn() && resource.data.ownerUid == request.auth.uid);
-      allow create: if signedIn()
-                    && request.resource.data.ownerUid == request.auth.uid
-                    && request.resource.data.id == conversationId
-                    && validOwnerName(request.resource.data.ownerName)
-                    && boundedConversation(request.resource.data);
-      allow update: if signedIn()
-                    && resource.data.ownerUid == request.auth.uid
-                    && request.resource.data.ownerUid == resource.data.ownerUid
-                    && request.resource.data.id == resource.data.id
-                    && request.resource.data.createdAt == resource.data.createdAt
-                    && validOwnerName(request.resource.data.ownerName)
-                    && boundedConversation(request.resource.data);
+
+      allow get: if
+        resource.data.visibility == 'public'
+        || (signedIn() && resource.data.ownerUid == request.auth.uid);
+
+      allow list: if
+        signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.query.limit != null
+        && request.query.limit <= 30;
+
+      allow create: if
+        signedIn()
+        && request.resource.data.keys().hasOnly(['id','title','visibility','ownerUid','ownerName','createdAt','updatedAt','messages'])
+        && request.resource.data.id == conversationId
+        && boundedPublicConversation(request.resource.data);
+
+      allow update: if
+        signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['id','title','visibility','ownerUid','ownerName','createdAt','updatedAt','messages'])
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.id == conversationId
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && boundedPublicConversation(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['title','visibility','updatedAt','messages','ownerName']);
+
       allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
-    // Owner-only complete record, including bounded version/response arrays and
-    // extracted attachment text. The HTML limits 20 versions, 5 responses,
-    // 10 attachments/message, 50 attachments/conversation, and 24 messages.
+
+    /*
+     * ============================================================
+     * aiConversationPrivate/{conversationId} — full-fidelity, owner-only
+     *
+     * conversationProjection(c,false) writes the whole local conversation
+     * minus sync-state fields. Per-message shape:
+     *   user:      {id, role, content, createdAt, versions[<=20],
+     *               activeVersionId, attachments[<=10]?, authorUid?}
+     *   assistant: {id, role, parentMessageId, parentVersionId,
+     *               generationId, content, sources?, responses[<=5],
+     *               activeResponseId, createdAt}
+     * Both the message-level `attachments` and each version's
+     * `attachments` are AI-panel attachments (preparedAttachments()/
+     * cleanAttachment()) — validated with validAiAttachment(), NOT
+     * validAttachment() (see header comment).
+     * Owner-only read/write, so the blast radius of a bad write is
+     * self-directed — this still validates shape/size to keep documents
+     * well-formed and under Firestore's per-doc size limit, without going
+     * as deep as re-verifying every derived field against its source
+     * version/response (the client keeps those in sync; forging your own
+     * private doc's derived fields only misleads your own client).
+     * ============================================================
+     */
+
+    function validVersion(value) {
+      return value is map
+        && value.keys().hasOnly(['id','content','createdAt','attachments'])
+        && validId(value.id)
+        && value.content is string && value.content.size() <= 2000
+        && value.createdAt is string
+        && (!('attachments' in value) || validAiAttachments(value.attachments, 10));
+    }
+    function validResponse(value) {
+      return value is map
+        && value.keys().hasOnly(['id','parentVersionId','generationId','content','sources','createdAt'])
+        && validId(value.id)
+        && value.parentVersionId is string && value.parentVersionId.size() <= 64
+        && value.generationId is string && value.generationId.size() <= 64
+        && value.content is string && value.content.size() <= 6000
+        && value.createdAt is string
+        && (!('sources' in value) || validSources(value.sources));
+    }
+    function validPrivateMessage(value) {
+      return value is map
+        && validId(value.id)
+        && value.createdAt is string
+        && (
+             (value.role == 'user'
+              && value.keys().hasOnly(['id','role','content','createdAt','versions','activeVersionId','attachments','authorUid'])
+              && value.content is string && value.content.size() <= 2000
+              && value.versions is list && value.versions.size() <= 20 && value.versions.all(validVersion)
+              && validId(value.activeVersionId)
+              && (!('attachments' in value) || validAiAttachments(value.attachments, 10))
+              && (!('authorUid' in value) || (value.authorUid is string && value.authorUid.size() <= 128)))
+             ||
+             (value.role == 'assistant'
+              && value.keys().hasOnly(['id','role','parentMessageId','parentVersionId','generationId','content','sources','responses','activeResponseId','createdAt'])
+              && validId(value.parentMessageId)
+              && value.parentVersionId is string && value.parentVersionId.size() <= 64
+              && value.generationId is string && value.generationId.size() <= 64
+              && value.content is string && value.content.size() <= 6000
+              && (!('sources' in value) || validSources(value.sources))
+              && value.responses is list && value.responses.size() <= 5 && value.responses.all(validResponse)
+              && validId(value.activeResponseId))
+           );
+    }
+    function validPrivateMessages(value) {
+      return value is list && value.size() <= 24 && value.all(validPrivateMessage);
+    }
+    function boundedPrivateConversation(data) {
+      return validId(data.id)
+        && data.ownerUid is string && data.ownerUid == request.auth.uid
+        && validOwnerName(data.ownerName)
+        && data.title is string && data.title.size() <= 80
+        && validAiDate(data.createdAt)
+        && validAiDate(data.updatedAt)
+        && validVisibility(data.visibility)
+        && validPrivateMessages(data.messages);
+    }
+
     match /aiConversationPrivate/{conversationId} {
-      allow read: if signedIn() && resource.data.ownerUid == request.auth.uid;
-      allow create: if signedIn()
-                    && request.resource.data.ownerUid == request.auth.uid
-                    && request.resource.data.id == conversationId
-                    && validOwnerName(request.resource.data.ownerName)
-                    && boundedConversation(request.resource.data);
-      allow update: if signedIn()
-                    && resource.data.ownerUid == request.auth.uid
-                    && request.resource.data.ownerUid == resource.data.ownerUid
-                    && request.resource.data.id == resource.data.id
-                    && request.resource.data.createdAt == resource.data.createdAt
-                    && validOwnerName(request.resource.data.ownerName)
-                    && (!('syncRevision' in request.resource.data)
-                        || !('syncRevision' in resource.data)
-                        || request.resource.data.syncRevision > resource.data.syncRevision)
-                    && boundedConversation(request.resource.data);
+
+      allow get: if signedIn() && resource.data.ownerUid == request.auth.uid;
+
+      allow list: if
+        signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.query.limit != null
+        && request.query.limit <= 30;
+
+      allow create: if
+        signedIn()
+        && request.resource.data.keys().hasOnly(['id','title','visibility','ownerUid','ownerName','createdAt','updatedAt','messages','syncRevision'])
+        && request.resource.data.id == conversationId
+        && boundedPrivateConversation(request.resource.data)
+        && (!('syncRevision' in request.resource.data)
+            || (request.resource.data.syncRevision is int && request.resource.data.syncRevision >= 0));
+
+      allow update: if
+        signedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['id','title','visibility','ownerUid','ownerName','createdAt','updatedAt','messages','syncRevision'])
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.id == conversationId
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && boundedPrivateConversation(request.resource.data)
+        // syncRevision must strictly increase whenever both sides have it,
+        // so a stale/out-of-order write can no longer clobber a newer one.
+        && (!('syncRevision' in request.resource.data)
+            || !('syncRevision' in resource.data)
+            || request.resource.data.syncRevision > resource.data.syncRevision)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['title','visibility','updatedAt','messages','syncRevision','ownerName']);
+
       allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
     }
 
-    match /{document=**} { allow read, write: if false; }
+
+    /*
+     * ============================================================
+     * DEFAULT DENY
+     * ============================================================
+     */
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
   }
 }
 
