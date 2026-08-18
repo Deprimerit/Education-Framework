@@ -2194,8 +2194,27 @@ service cloud.firestore {
         && (!('localOnly' in value) || value.localOnly == false)
         && (!('text' in value) || (value.text is string && value.text.size() <= 8000));
     }
-    function validAttachments(value, maxCount) {
-      return value is list && value.size() <= maxCount && value.all(validAttachment);
+    // NOTE: Firestore Rules' List type has no .all()/.every() iteration method
+    // (see https://firebase.google.com/docs/reference/rules/rules.List) —
+    // rules functions also cannot loop. value.all(validAttachment) below was
+    // therefore calling a function that does not exist. That is not a
+    // compile error (the rules still publish), but every evaluation of it at
+    // request time errors out, and a rule that errors is treated as a deny —
+    // which is exactly why every comment/attachment write was silently
+    // permission-denied even after the identity-claim fix. Fixed by manually
+    // unrolling the check across the fixed max of 10 items instead.
+    function validAttachments(value) {
+      return value is list && value.size() <= 10
+        && (value.size() < 1 || validAttachment(value[0]))
+        && (value.size() < 2 || validAttachment(value[1]))
+        && (value.size() < 3 || validAttachment(value[2]))
+        && (value.size() < 4 || validAttachment(value[3]))
+        && (value.size() < 5 || validAttachment(value[4]))
+        && (value.size() < 6 || validAttachment(value[5]))
+        && (value.size() < 7 || validAttachment(value[6]))
+        && (value.size() < 8 || validAttachment(value[7]))
+        && (value.size() < 9 || validAttachment(value[8]))
+        && (value.size() < 10 || validAttachment(value[9]));
     }
 
     // ---------- AI chat attachments (never uploaded — preparedAttachments()/cleanAttachment()) ----------
@@ -2221,8 +2240,18 @@ service cloud.firestore {
         && (!('localOnly' in value) || value.localOnly == true)
         && (!('text' in value) || (value.text is string && value.text.size() <= 8000));
     }
-    function validAiAttachments(value, maxCount) {
-      return value is list && value.size() <= maxCount && value.all(validAiAttachment);
+    function validAiAttachments(value) {
+      return value is list && value.size() <= 10
+        && (value.size() < 1 || validAiAttachment(value[0]))
+        && (value.size() < 2 || validAiAttachment(value[1]))
+        && (value.size() < 3 || validAiAttachment(value[2]))
+        && (value.size() < 4 || validAiAttachment(value[3]))
+        && (value.size() < 5 || validAiAttachment(value[4]))
+        && (value.size() < 6 || validAiAttachment(value[5]))
+        && (value.size() < 7 || validAiAttachment(value[6]))
+        && (value.size() < 8 || validAiAttachment(value[7]))
+        && (value.size() < 9 || validAiAttachment(value[8]))
+        && (value.size() < 10 || validAiAttachment(value[9]));
     }
 
     // ---------- External references (Wikipedia lookups only, per references()) ----------
@@ -2235,7 +2264,13 @@ service cloud.firestore {
     }
     function validSources(value) {
       // references() requests gsrlimit=4; 6 leaves headroom without being unbounded.
-      return value is list && value.size() <= 6 && value.all(validSource);
+      return value is list && value.size() <= 6
+        && (value.size() < 1 || validSource(value[0]))
+        && (value.size() < 2 || validSource(value[1]))
+        && (value.size() < 3 || validSource(value[2]))
+        && (value.size() < 4 || validSource(value[3]))
+        && (value.size() < 5 || validSource(value[4]))
+        && (value.size() < 6 || validSource(value[5]));
     }
 
 
@@ -2289,7 +2324,7 @@ service cloud.firestore {
         && validAuthorPhoto(request.resource.data.authorPhoto)
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == null
-        && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments, 10));
+        && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments));
 
       allow update: if
         signedIn()
@@ -2330,7 +2365,7 @@ service cloud.firestore {
         && (
              (request.resource.data.deleted == false
               && request.resource.data.body.size() > 0
-              && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments, 10)))
+              && (!('attachments' in request.resource.data) || validAttachments(request.resource.data.attachments)))
              ||
              (request.resource.data.deleted == true
               && request.resource.data.body == ''
@@ -2381,7 +2416,31 @@ service cloud.firestore {
            );
     }
     function validPublicMessages(value) {
-      return value is list && value.size() <= 24 && value.all(validPublicMessage);
+      return value is list && value.size() <= 24
+        && (value.size() < 1 || validPublicMessage(value[0]))
+        && (value.size() < 2 || validPublicMessage(value[1]))
+        && (value.size() < 3 || validPublicMessage(value[2]))
+        && (value.size() < 4 || validPublicMessage(value[3]))
+        && (value.size() < 5 || validPublicMessage(value[4]))
+        && (value.size() < 6 || validPublicMessage(value[5]))
+        && (value.size() < 7 || validPublicMessage(value[6]))
+        && (value.size() < 8 || validPublicMessage(value[7]))
+        && (value.size() < 9 || validPublicMessage(value[8]))
+        && (value.size() < 10 || validPublicMessage(value[9]))
+        && (value.size() < 11 || validPublicMessage(value[10]))
+        && (value.size() < 12 || validPublicMessage(value[11]))
+        && (value.size() < 13 || validPublicMessage(value[12]))
+        && (value.size() < 14 || validPublicMessage(value[13]))
+        && (value.size() < 15 || validPublicMessage(value[14]))
+        && (value.size() < 16 || validPublicMessage(value[15]))
+        && (value.size() < 17 || validPublicMessage(value[16]))
+        && (value.size() < 18 || validPublicMessage(value[17]))
+        && (value.size() < 19 || validPublicMessage(value[18]))
+        && (value.size() < 20 || validPublicMessage(value[19]))
+        && (value.size() < 21 || validPublicMessage(value[20]))
+        && (value.size() < 22 || validPublicMessage(value[21]))
+        && (value.size() < 23 || validPublicMessage(value[22]))
+        && (value.size() < 24 || validPublicMessage(value[23]));
     }
     function boundedPublicConversation(data) {
       return validId(data.id)
@@ -2458,7 +2517,7 @@ service cloud.firestore {
         && validId(value.id)
         && value.content is string && value.content.size() <= 2000
         && value.createdAt is string
-        && (!('attachments' in value) || validAiAttachments(value.attachments, 10));
+        && (!('attachments' in value) || validAiAttachments(value.attachments));
     }
     function validResponse(value) {
       return value is map
@@ -2470,6 +2529,40 @@ service cloud.firestore {
         && value.createdAt is string
         && (!('sources' in value) || validSources(value.sources));
     }
+    // Unrolled per-index checks (see the note above validAttachments()) —
+    // value.versions.all(validVersion) / value.responses.all(validResponse)
+    // do not exist as List methods and were silently failing every write.
+    function validVersions(value) {
+      return value is list && value.size() <= 20
+        && (value.size() < 1  || validVersion(value[0]))
+        && (value.size() < 2  || validVersion(value[1]))
+        && (value.size() < 3  || validVersion(value[2]))
+        && (value.size() < 4  || validVersion(value[3]))
+        && (value.size() < 5  || validVersion(value[4]))
+        && (value.size() < 6  || validVersion(value[5]))
+        && (value.size() < 7  || validVersion(value[6]))
+        && (value.size() < 8  || validVersion(value[7]))
+        && (value.size() < 9  || validVersion(value[8]))
+        && (value.size() < 10 || validVersion(value[9]))
+        && (value.size() < 11 || validVersion(value[10]))
+        && (value.size() < 12 || validVersion(value[11]))
+        && (value.size() < 13 || validVersion(value[12]))
+        && (value.size() < 14 || validVersion(value[13]))
+        && (value.size() < 15 || validVersion(value[14]))
+        && (value.size() < 16 || validVersion(value[15]))
+        && (value.size() < 17 || validVersion(value[16]))
+        && (value.size() < 18 || validVersion(value[17]))
+        && (value.size() < 19 || validVersion(value[18]))
+        && (value.size() < 20 || validVersion(value[19]));
+    }
+    function validResponses(value) {
+      return value is list && value.size() <= 5
+        && (value.size() < 1 || validResponse(value[0]))
+        && (value.size() < 2 || validResponse(value[1]))
+        && (value.size() < 3 || validResponse(value[2]))
+        && (value.size() < 4 || validResponse(value[3]))
+        && (value.size() < 5 || validResponse(value[4]));
+    }
     function validPrivateMessage(value) {
       return value is map
         && validId(value.id)
@@ -2478,9 +2571,9 @@ service cloud.firestore {
              (value.role == 'user'
               && value.keys().hasOnly(['id','role','content','createdAt','versions','activeVersionId','attachments','authorUid'])
               && value.content is string && value.content.size() <= 2000
-              && value.versions is list && value.versions.size() <= 20 && value.versions.all(validVersion)
+              && validVersions(value.versions)
               && validId(value.activeVersionId)
-              && (!('attachments' in value) || validAiAttachments(value.attachments, 10))
+              && (!('attachments' in value) || validAiAttachments(value.attachments))
               && (!('authorUid' in value) || (value.authorUid is string && value.authorUid.size() <= 128)))
              ||
              (value.role == 'assistant'
@@ -2490,12 +2583,36 @@ service cloud.firestore {
               && value.generationId is string && value.generationId.size() <= 64
               && value.content is string && value.content.size() <= 6000
               && (!('sources' in value) || validSources(value.sources))
-              && value.responses is list && value.responses.size() <= 5 && value.responses.all(validResponse)
+              && validResponses(value.responses)
               && validId(value.activeResponseId))
            );
     }
     function validPrivateMessages(value) {
-      return value is list && value.size() <= 24 && value.all(validPrivateMessage);
+      return value is list && value.size() <= 24
+        && (value.size() < 1  || validPrivateMessage(value[0]))
+        && (value.size() < 2  || validPrivateMessage(value[1]))
+        && (value.size() < 3  || validPrivateMessage(value[2]))
+        && (value.size() < 4  || validPrivateMessage(value[3]))
+        && (value.size() < 5  || validPrivateMessage(value[4]))
+        && (value.size() < 6  || validPrivateMessage(value[5]))
+        && (value.size() < 7  || validPrivateMessage(value[6]))
+        && (value.size() < 8  || validPrivateMessage(value[7]))
+        && (value.size() < 9  || validPrivateMessage(value[8]))
+        && (value.size() < 10 || validPrivateMessage(value[9]))
+        && (value.size() < 11 || validPrivateMessage(value[10]))
+        && (value.size() < 12 || validPrivateMessage(value[11]))
+        && (value.size() < 13 || validPrivateMessage(value[12]))
+        && (value.size() < 14 || validPrivateMessage(value[13]))
+        && (value.size() < 15 || validPrivateMessage(value[14]))
+        && (value.size() < 16 || validPrivateMessage(value[15]))
+        && (value.size() < 17 || validPrivateMessage(value[16]))
+        && (value.size() < 18 || validPrivateMessage(value[17]))
+        && (value.size() < 19 || validPrivateMessage(value[18]))
+        && (value.size() < 20 || validPrivateMessage(value[19]))
+        && (value.size() < 21 || validPrivateMessage(value[20]))
+        && (value.size() < 22 || validPrivateMessage(value[21]))
+        && (value.size() < 23 || validPrivateMessage(value[22]))
+        && (value.size() < 24 || validPrivateMessage(value[23]));
     }
     function boundedPrivateConversation(data) {
       return validId(data.id)
