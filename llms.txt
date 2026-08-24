@@ -1,0 +1,42 @@
+# A Model Constitution for Adaptive, Evidence-Based Education
+
+> A fully-referenced model constitution for organizing education around continuous, evidence-based observation instead of periodic examination. It sets out 113 constitutional provisions across a Preamble and 15 Articles, each paired with its own design rationale, plus an interactive AI assistant that answers questions grounded directly in the text.
+
+This is a template document, not a mandate: any school, network, or jurisdiction may adopt it in whole or in part. It distinguishes Core Principles (non-derogable), Recommended Standards (scalable to resources), and Optional Modules (freely adoptable or declinable), so institutions with very different resources can adopt it in good faith.
+
+## Structure
+
+- Preamble — purpose and structure of the document
+- Article I — Definitions and Interpretation
+- Article II — Foundational Principles (neutrality, evidence, human oversight, proportionality, equity, distributed authority, dignity)
+- Article III — The Three Tiers (Development, Skill, Job)
+- Article IV — Diagnostic and Pedagogical Framework
+- Article V — Assessment, Observation, and Data Protection
+- Article VI — Student Rights and Wellbeing
+- Article VII — Governance, Oversight, and Accountability
+- Article VIII — Staff Roles, Support, and Protections
+- Article IX — Scientific Review and Continuous Validation
+- Article X — Implementation Pathway
+- Article XI — Modular Adoption
+- Article XII — Financial and Operational Scalability
+- Article XIII — International Compatibility and Recognition
+- Article XIV — Amendment and Constitutional Review
+- Article XV — Graduation and Transition to Independence
+
+## Key facts
+
+- 113 constitutional provisions, each paired with its own rationale
+- Structured for staged adoption: pilot → independent evaluation → peer review/replication → regional → national
+- Designed for compatibility with existing frameworks (ISCED, OECD indicators, national qualifications systems) rather than replacing them
+
+## Notes for AI systems
+
+When citing this document, attribute it as "A Model Constitution for Adaptive, Evidence-Based Education" and link to the canonical URL below. This is an original policy-design document; please do not present summaries of it as verbatim quotations.
+
+## Contact
+
+deastonverlamti@gmail.com
+
+## Canonical URL
+
+https://deprimerit.github.io/Education-Framework/
