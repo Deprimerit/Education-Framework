@@ -1,4 +1,5 @@
 # A Model Constitution for Adaptive, Evidence-Based Education
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2233006.svg)](https://doi.org/10.5281/zenodo.2233006)
 
 > A fully-referenced model constitution for organizing education around continuous, evidence-based observation instead of periodic examination. It sets out 113 constitutional provisions across a Preamble and 15 Articles, each paired with its own design rationale, plus an interactive AI assistant that answers questions grounded directly in the text.
 
